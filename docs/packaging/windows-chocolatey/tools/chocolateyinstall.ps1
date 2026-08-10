@@ -1,2 +1,1 @@
-﻿$ErrorActionPreference = 'Stop';
-py -m pip install $env:ChocolateyPackageName==$env:ChocolateyPackageVersion --disable-pip-version-check
+﻿$ErrorActionPreference = 'Stop';\npython -m pip install $env:ChocolateyPackageName==$env:ChocolateyPackageVersion --disable-pip-version-check\n
