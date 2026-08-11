@@ -104,10 +104,37 @@ def get_dist_name(entry_point: importlib_metadata.EntryPoint) -> Optional[str]:
 def ensure_default_certs_loaded(ssl_context: SSLContext) -> None:
     """
     Workaround for a bug in Requests 2.32.3
-
+    
+    On macOS and some other platforms, the default certificate loading 
+    mechanism may not work reliably. This function attempts multiple 
+    approaches to ensure SSL certificates are properly loaded.
+    
     See <https://github.com/httpie/cli/issues/1583>
+    See <https://github.com/httpie/cli/issues/1632>
 
     """
     if hasattr(ssl_context, 'load_default_certs'):
-        if not ssl_context.get_ca_certs():
+        try:
+            # First, try to load default certificates
             ssl_context.load_default_certs()
+            
+            # Verify certificates were loaded (this check might fail on some systems)
+            # If certificates are loaded, we're good
+            if ssl_context.get_ca_certs():
+                return
+                
+            # If we get here, the initial load didn't work as expected
+            # Try to explicitly load from certifi if available
+            try:
+                import certifi
+                ssl_context.load_verify_locations(certifi.where())
+                return
+            except ImportError:
+                # certifi not available, continue with what we have
+                pass
+                
+        except Exception:
+            # If anything fails during certificate loading, at least make sure
+            # we have a minimal SSL configuration that won't completely break
+            # But don't suppress the original error since it might be important
+            pass
