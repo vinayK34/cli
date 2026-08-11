@@ -6,6 +6,7 @@ import sys
 from argparse import RawDescriptionHelpFormatter
 from textwrap import dedent
 from urllib.parse import urlsplit
+from typing import Optional, Tuple, Union
 
 from requests.utils import get_netrc_auth
 
@@ -280,79 +281,106 @@ class HTTPieArgumentParser(BaseHTTPieArgumentParser):
             self.args.cert_key_pass.prompt_password(self.args.cert_key)
 
     def _process_auth(self):
+        """Process authentication-related arguments."""
         # TODO: refactor & simplify this method.
         self.args.auth_plugin = None
         default_auth_plugin = plugin_manager.get_auth_plugins()[0]
         auth_type_set = self.args.auth_type is not None
         url = urlsplit(self.args.url)
 
+        # Handle embedded URL credentials
         if self.args.auth is None and not auth_type_set:
-            if url.username is not None:
-                # Handle http://username:password@hostname/
-                username = url.username
-                password = url.password or ''
-                self.args.auth = AuthCredentials(
-                    key=username,
-                    value=password,
-                    sep=SEPARATOR_CREDENTIALS,
-                    orig=SEPARATOR_CREDENTIALS.join([username, password])
-                )
+            self._handle_embedded_url_credentials(url)
 
+        # Process authentication if needed
         if self.args.auth is not None or auth_type_set:
-            if not self.args.auth_type:
-                self.args.auth_type = default_auth_plugin.auth_type
-            plugin = plugin_manager.get_auth_plugin(self.args.auth_type)()
+            self._process_auth_with_plugin(default_auth_plugin, auth_type_set, url)
 
-            if (not self.args.ignore_netrc
-                    and self.args.auth is None
-                    and plugin.netrc_parse):
-                # Only host needed, so it’s OK URL not finalized.
-                netrc_credentials = get_netrc_auth(self.args.url)
-                if netrc_credentials:
-                    self.args.auth = AuthCredentials(
-                        key=netrc_credentials[0],
-                        value=netrc_credentials[1],
-                        sep=SEPARATOR_CREDENTIALS,
-                        orig=SEPARATOR_CREDENTIALS.join(netrc_credentials)
-                    )
+        # Handle .netrc if needed
+        if (not self.args.ignore_netrc
+                and self.args.auth is None
+                and self._get_auth_plugin(default_auth_plugin).netrc_parse):
+            self._process_netrc_credentials(url)
 
-            if plugin.auth_require and self.args.auth is None:
-                self.error('--auth required')
+        # Handle auth requirement validation
+        if self._get_auth_plugin(default_auth_plugin).auth_require and self.args.auth is None:
+            self.error('--auth required')
 
-            plugin.raw_auth = self.args.auth
-            self.args.auth_plugin = plugin
-            already_parsed = isinstance(self.args.auth, AuthCredentials)
+        # Handle authentication prompting and finalization
+        if self.args.auth is not None:
+            self._finalize_authentication(default_auth_plugin, url)
 
-            if self.args.auth is None or not plugin.auth_parse:
-                self.args.auth = plugin.get_auth()
-            else:
-                if already_parsed:
-                    # from the URL
-                    credentials = self.args.auth
-                else:
-                    credentials = parse_auth(self.args.auth)
-
-                if (not credentials.has_password()
-                        and plugin.prompt_password):
-                    if self.args.ignore_stdin:
-                        # Non-tty stdin read by now
-                        self.error(
-                            'Unable to prompt for passwords because'
-                            ' --ignore-stdin is set.'
-                        )
-                    credentials.prompt_password(url.netloc)
-
-                if (credentials.key and credentials.value):
-                    plugin.raw_auth = credentials.key + ":" + credentials.value
-
-                self.args.auth = plugin.get_auth(
-                    username=credentials.key,
-                    password=credentials.value,
-                )
+        # Set no-op auth to force requests to ignore .netrc
         if not self.args.auth and self.args.ignore_netrc:
-            # Set a no-op auth to force requests to ignore .netrc
-            # <https://github.com/psf/requests/issues/2773#issuecomment-174312831>
             self.args.auth = ExplicitNullAuth()
+
+    def _handle_embedded_url_credentials(self, url):
+        """Handle authentication credentials embedded in the URL."""
+        if url.username is not None:
+            # Handle http://username:***@hostname/
+            username = url.username
+            password = url.password or ''
+            self.args.auth = AuthCredentials(
+                key=username,
+                value=password,
+                sep=SEPARATOR_CREDENTIALS,
+                orig=SEPARATOR_CREDENTIALS.join([username, password])
+            )
+
+    def _get_auth_plugin(self, default_auth_plugin):
+        """Get the authentication plugin."""
+        if not self.args.auth_type:
+            self.args.auth_type = default_auth_plugin.auth_type
+        return plugin_manager.get_auth_plugin(self.args.auth_type)()
+
+    def _process_auth_with_plugin(self, default_auth_plugin, auth_type_set, url):
+        """Process authentication with plugin."""
+        plugin = self._get_auth_plugin(default_auth_plugin)()
+        self.args.auth_plugin = plugin
+        plugin.raw_auth = self.args.auth
+
+    def _process_netrc_credentials(self, url):
+        """Process .netrc credentials."""
+        netrc_credentials = get_netrc_auth(self.args.url)
+        if netrc_credentials:
+            self.args.auth = AuthCredentials(
+                key=netrc_credentials[0],
+                value=netrc_credentials[1],
+                sep=SEPARATOR_CREDENTIALS,
+                orig=SEPARATOR_CREDENTIALS.join(netrc_credentials)
+            )
+
+    def _finalize_authentication(self, default_auth_plugin, url):
+        """Finalize authentication processing."""
+        plugin = self._get_auth_plugin(default_auth_plugin)()
+        already_parsed = isinstance(self.args.auth, AuthCredentials)
+
+        if self.args.auth is None or not plugin.auth_parse:
+            self.args.auth = plugin.get_auth()
+        else:
+            if already_parsed:
+                # from the URL
+                credentials = self.args.auth
+            else:
+                credentials = parse_auth(self.args.auth)
+
+            if (not credentials.has_password()
+                    and plugin.prompt_password):
+                if self.args.ignore_stdin:
+                    # Non-tty stdin read by now
+                    self.error(
+                        'Unable to prompt for passwords because'
+                        ' --ignore-stdin is set.'
+                    )
+                credentials.prompt_password(url.netloc)
+
+            if (credentials.key and credentials.value):
+                plugin.raw_auth = credentials.key + ":" + credentials.value
+
+            self.args.auth = plugin.get_auth(
+                username=credentials.key,
+                password=creden…lue,
+            )
 
     def _apply_no_options(self, no_options):
         """For every `--no-OPTION` in `no_options`, set `args.OPTION` to
@@ -377,7 +405,7 @@ class HTTPieArgumentParser(BaseHTTPieArgumentParser):
                 invalid.append(option)
 
         if invalid:
-            self.error(f'unrecognized arguments: {" ".join(invalid)}')
+            self.error('unrecognized arguments: {}'.format(' '.join(invalid)))
 
     def _body_from_file(self, fd):
         """Read the data from a file-like object.
@@ -474,7 +502,7 @@ class HTTPieArgumentParser(BaseHTTPieArgumentParser):
                 if key != '':
                     self.error(
                         'Invalid file fields (perhaps you meant --form?):'
-                        f' {",".join(self.args.files.keys())}')
+                        '{}'.format(','.join(self.args.files.keys())))
                 if request_file is not None:
                     self.error("Can't read request from multiple files")
                 request_file = file
@@ -489,18 +517,18 @@ class HTTPieArgumentParser(BaseHTTPieArgumentParser):
                 if content_type:
                     self.args.headers['Content-Type'] = content_type
 
+    def _check_options(self, value, option):
+        """Check validity of output options."""
+        unknown = set(value) - OUTPUT_OPTIONS
+        if unknown:
+            self.error('Unknown output options: {}={}'.format(option, ','.join(unknown)))
+
     def _process_output_options(self):
         """Apply defaults to output options, or validate the provided ones.
 
         The default output options are stdout-type-sensitive.
 
         """
-
-        def check_options(value, option):
-            unknown = set(value) - OUTPUT_OPTIONS
-            if unknown:
-                self.error(f'Unknown output options: {option}={",".join(unknown)}')
-
         if self.args.verbose:
             self.args.all = True
 
@@ -519,8 +547,8 @@ class HTTPieArgumentParser(BaseHTTPieArgumentParser):
         if self.args.output_options_history is None:
             self.args.output_options_history = self.args.output_options
 
-        check_options(self.args.output_options, '--print')
-        check_options(self.args.output_options_history, '--history-print')
+        self._check_options(self.args.output_options, '--print')
+        self._check_options(self.args.output_options_history, '--history-print')
 
         if self.args.download and OUT_RESP_BODY in self.args.output_options:
             # Response body is always downloaded with --download and it goes
@@ -601,13 +629,12 @@ class HTTPieArgumentParser(BaseHTTPieArgumentParser):
         self.print_usage(sys.stderr)
         self.env.rich_error_console.print(
             dedent(
-                f'''
+                '''
                 [bold]error[/bold]:
-                    {message}
-
+                    {}
                 [bold]for more information[/bold]:
-                    run '{self.prog} --help' or visit https://httpie.io/docs/cli
-                '''.rstrip()
+                    run '{}' --help' or visit https://httpie.io/docs/cli
+                '''.format(message, self.prog).rstrip()
             )
         )
         self.exit(2)
