@@ -1,3 +1,4 @@
+import os
 import sys
 from ssl import SSLContext
 from typing import Any, Optional, Iterable
@@ -103,11 +104,51 @@ def get_dist_name(entry_point: importlib_metadata.EntryPoint) -> Optional[str]:
 
 def ensure_default_certs_loaded(ssl_context: SSLContext) -> None:
     """
-    Workaround for a bug in Requests 2.32.3
+    Ensure the given SSL context has a usable set of CA certificates loaded.
 
-    See <https://github.com/httpie/cli/issues/1583>
+    Historically this only worked around a bug in Requests 2.32.3
+    (<https://github.com/httpie/cli/issues/1583>) by calling
+    `load_default_certs()`. However, on platforms where OpenSSL's default
+    trust store is empty (most notably python.org macOS builds, which rely
+    on certifi rather than a system OpenSSL trust store),
+    `load_default_certs()` loads nothing at all, leaving HTTPie unable to
+    verify any certificate even though `requests` itself works fine.
+
+    Because we always pass a custom SSLContext down to urllib3, urllib3
+    skips its own default-cert loading, and Requests skips its certifi
+    preloading too — so nobody loads certifi for us. Fall back to the CA
+    bundle Requests would have used (certifi) in that case.
+
+    See <https://github.com/httpie/cli/issues/1632>
 
     """
-    if hasattr(ssl_context, 'load_default_certs'):
-        if not ssl_context.get_ca_certs():
-            ssl_context.load_default_certs()
+    if not hasattr(ssl_context, 'load_default_certs'):
+        # Custom pyOpenSSL contexts don't support it.
+        return
+
+    if ssl_context.get_ca_certs():
+        return
+
+    ssl_context.load_default_certs()
+    if ssl_context.get_ca_certs():
+        return
+
+    # The platform's default trust store is empty (e.g. python.org macOS
+    # builds). Fall back to the CA bundle Requests itself uses (certifi),
+    # so that HTTPie is never less capable than `requests` by default.
+    try:
+        from requests.utils import DEFAULT_CA_BUNDLE_PATH, extract_zipped_paths
+    except ImportError:
+        return
+
+    if not DEFAULT_CA_BUNDLE_PATH:
+        return
+
+    ca_bundle_path = extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)
+    if not ca_bundle_path or not os.path.exists(ca_bundle_path):
+        return
+
+    if os.path.isdir(ca_bundle_path):
+        ssl_context.load_verify_locations(capath=ca_bundle_path)
+    else:
+        ssl_context.load_verify_locations(cafile=ca_bundle_path)
