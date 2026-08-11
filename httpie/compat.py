@@ -1,6 +1,9 @@
+import os
 import sys
 from ssl import SSLContext
 from typing import Any, Optional, Iterable
+
+from requests.adapters import DEFAULT_CA_BUNDLE_PATH
 
 from httpie.cookies import HTTPieCookiePolicy
 from http import cookiejar  # noqa
@@ -103,11 +106,26 @@ def get_dist_name(entry_point: importlib_metadata.EntryPoint) -> Optional[str]:
 
 def ensure_default_certs_loaded(ssl_context: SSLContext) -> None:
     """
-    Workaround for a bug in Requests 2.32.3
+    Load the default CA certificates into the given SSL context.
 
-    See <https://github.com/httpie/cli/issues/1583>
+    Because we always use our own SSL context (to be able to support
+    `--ssl` and `--ciphers`), Requests doesn’t load any CA bundle for us
+    when `--verify=yes` — it assumes a custom context already trusts the
+    default CAs. See <https://github.com/httpie/cli/issues/1583>.
+
+    `SSLContext.load_default_certs()` relies on OpenSSL’s default verify
+    paths, which are empty on some platforms (most notably the python.org
+    macOS builds). In that case we fall back to the `certifi` bundle, which
+    is exactly what Requests itself trusts by default — otherwise HTTPie
+    would end up with an empty trust store and fail to verify any
+    certificate. See <https://github.com/httpie/cli/issues/1632>.
 
     """
-    if hasattr(ssl_context, 'load_default_certs'):
-        if not ssl_context.get_ca_certs():
-            ssl_context.load_default_certs()
+    if not hasattr(ssl_context, 'load_default_certs'):
+        return
+
+    if not ssl_context.get_ca_certs():
+        ssl_context.load_default_certs()
+
+    if not ssl_context.get_ca_certs() and os.path.exists(DEFAULT_CA_BUNDLE_PATH):
+        ssl_context.load_verify_locations(cafile=DEFAULT_CA_BUNDLE_PATH)
