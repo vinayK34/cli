@@ -5,7 +5,7 @@ import re
 import sys
 from argparse import RawDescriptionHelpFormatter
 from textwrap import dedent
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, unquote
 
 from requests.utils import get_netrc_auth
 
@@ -291,6 +291,12 @@ class HTTPieArgumentParser(BaseHTTPieArgumentParser):
                 # Handle http://username:password@hostname/
                 username = url.username
                 password = url.password or ''
+                
+                # Decode percent-encoded credentials
+                username = unquote(username)
+                if password:
+                    password = unquote(password)
+                    
                 self.args.auth = AuthCredentials(
                     key=username,
                     value=password,
@@ -377,7 +383,7 @@ class HTTPieArgumentParser(BaseHTTPieArgumentParser):
                 invalid.append(option)
 
         if invalid:
-            self.error(f'unrecognized arguments: {" ".join(invalid)}')
+            self.error(f'unrecognized arguments: {"".join(invalid)}')
 
     def _body_from_file(self, fd):
         """Read the data from a file-like object.
