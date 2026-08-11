@@ -12,6 +12,7 @@ from http import cookiejar  # noqa
 cookiejar.DefaultCookiePolicy = HTTPieCookiePolicy
 
 is_windows = 'win32' in str(sys.platform).lower()
+is_macos = 'darwin' in str(sys.platform).lower()
 is_frozen = getattr(sys, 'frozen', False)
 
 MIN_SUPPORTED_PY_VERSION = (3, 7)
@@ -110,4 +111,19 @@ def ensure_default_certs_loaded(ssl_context: SSLContext) -> None:
     """
     if hasattr(ssl_context, 'load_default_certs'):
         if not ssl_context.get_ca_certs():
-            ssl_context.load_default_certs()
+            # On macOS, we need to ensure certificates are loaded properly
+            # This fixes the issue where SSL certificates aren't loaded correctly
+            # on macOS systems, causing "CERTIFICATE_VERIFY_FAILED" errors
+            try:
+                ssl_context.load_default_certs()
+            except Exception:
+                # If load_default_certs fails, try alternative approaches
+                # For macOS specifically, we might need to use certifi
+                if is_macos:
+                    try:
+                        import certifi
+                        ssl_context.load_verify_locations(certifi.where())
+                    except ImportError:
+                        # If certifi is not available, we can't do much more
+                        # The error will be raised by the SSL context when needed
+                        pass
