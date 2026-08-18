@@ -25,6 +25,10 @@ Main features:
 - Expressive and intuitive syntax
 - Linux, macOS, Windows, and FreeBSD support
 - All that and more in 2 simple commands: `http` + `https`
+
+Requires Python 3.7 or newer. Any existing Python installation is used — including
+one installed from python.org — so Chocolatey will not install a second copy of Python.
+If no Python is found, the installer tells you how to get one (`choco install python3`).
 		</description>
 		<title>HTTPie</title>
 		<authors>HTTPie</authors>
@@ -40,9 +44,13 @@ Main features:
 		<projectSourceUrl>https://github.com/httpie/cli</projectSourceUrl>
 		<docsUrl>https://httpie.io/docs</docsUrl>
 		<bugTrackerUrl>https://github.com/httpie/cli/issues</bugTrackerUrl>
-		<dependencies>
-			<dependency id="python3" version="3.7" />
-		</dependencies>
+		<!--
+			No hard `python3` dependency on purpose: forcing Chocolatey's own Python
+			breaks installs on machines that already have Python from another source
+			(https://github.com/httpie/cli/issues/1621). tools/chocolateyinstall.ps1
+			detects an existing interpreter and reports a clear, actionable error when
+			there is genuinely none.
+		-->
 	</metadata>
 	<files>
 		<file src="tools\**" target="tools" />
