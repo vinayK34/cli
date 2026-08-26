@@ -77,11 +77,26 @@ class HTTPieHTTPSAdapter(HTTPAdapter):
             ciphers=ciphers,
             ssl_version=resolve_ssl_version(ssl_version),
             # Since we are using a custom SSL context, we need to pass this
-            # here manually, even though it’s also passed to the connection
+            # here manually, even though it's also passed to the connection
             # in `super().cert_verify()`.
             cert_reqs=ssl.CERT_REQUIRED if verify else ssl.CERT_NONE
         )
-        ensure_default_certs_loaded(ssl_context)
+        # Ensure default certificates are loaded for proper SSL verification
+        # This addresses https://github.com/httpie/cli/issues/1632
+        if verify:
+            # First try the existing ensure_default_certs_loaded function
+            ensure_default_certs_loaded(ssl_context)
+            
+            # Additional safety check for cases where certificates might not be loaded
+            # This handles the specific issue where create_urllib3_context() 
+            # creates a context with 0 certificates
+            if hasattr(ssl_context, 'load_default_certs') and not ssl_context.get_ca_certs():
+                try:
+                    ssl_context.load_default_certs()
+                except Exception:
+                    # If loading fails, continue with what we have
+                    # This preserves backward compatibility
+                    pass
         return ssl_context
 
     @classmethod
